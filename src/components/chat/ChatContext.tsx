@@ -3,7 +3,7 @@ import { INFINITE_QUERY_LIMIT } from '@/config/infinite-query';
 import { useToast } from '@/hooks/use-toast';
 import { useMutation } from '@tanstack/react-query';
 import { createContext, ReactNode, useRef, useState } from 'react';
-import Message from './Message';
+
 
 type StreamResponse = {
     addMessage: () => void,

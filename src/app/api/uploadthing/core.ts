@@ -6,6 +6,8 @@ import { PDFLoader } from "@langchain/community/document_loaders/fs/pdf";
 import { OpenAIEmbeddings } from 'langchain/embeddings/openai'
 import { PineconeStore } from '@langchain/pinecone'
 import { pineconeIndex } from '@/lib/pinecone'
+import { getUserSubscriptionPlan } from "@/lib/stripe";
+import { PLANS } from "@/config/stripe";
 
 const f = createUploadthing();
 
@@ -15,7 +17,9 @@ const middleware = async () => {
   
     if (!user || !(await user).id) throw new Error('Unauthorized')
   
-    return { userId: (await user).id }
+      const subscriptionPlan = await getUserSubscriptionPlan()
+
+      return { subscriptionPlan, userId: (await user).id }
 }
 
 const onUploadComplete = async ({
@@ -58,14 +62,30 @@ const onUploadComplete = async ({
 
     const pagesAmt = pageLevelDocs.length
 
-    // await db.file.update({
-    //   data: {
-    //     uploadStatus: 'FAILED',
-    //   },
-    //   where: {
-    //     id: createdFile.id,
-    //   },
-    // })
+    const { subscriptionPlan } = metadata
+    const { isSubscribed } = subscriptionPlan
+
+    const isProExceeded =
+      pagesAmt >
+      PLANS.find((plan) => plan.name === 'Pro')!.pagesPerPdf
+    const isFreeExceeded =
+      pagesAmt >
+      PLANS.find((plan) => plan.name === 'Free')!
+        .pagesPerPdf
+
+    if (
+      (isSubscribed && isProExceeded) ||
+      (!isSubscribed && isFreeExceeded)
+    ) {
+      await db.file.update({
+        data: {
+          uploadStatus: 'FAILED',
+        },
+        where: {
+          id: createdFile.id,
+        },
+      })
+    }
 
     const embeddings = new OpenAIEmbeddings({
       openAIApiKey: process.env.OPENAI_API_KEY,
