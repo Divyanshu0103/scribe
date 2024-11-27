@@ -2,11 +2,10 @@
 import { db } from "@/db";
 import { getKindeServerSession } from "@kinde-oss/kinde-auth-nextjs/server";
 import { createUploadthing, type FileRouter } from "uploadthing/next";
-import { PDFLoader } from 'langchain/document_loaders/fs/pdf'
+import { PDFLoader } from "@langchain/community/document_loaders/fs/pdf";
 import { OpenAIEmbeddings } from 'langchain/embeddings/openai'
-import { PineconeStore } from 'langchain/vectorstores/pinecone'
-import { getPineconeClient } from '@/lib/pinecone'
-
+import { PineconeStore } from '@langchain/pinecone'
+import { pineconeIndex } from '@/lib/pinecone'
 
 const f = createUploadthing();
 
@@ -19,70 +18,94 @@ const middleware = async () => {
     return { userId: (await user).id }
 }
 
-export const ourFileRouter = {
+const onUploadComplete = async ({
+  metadata,
+  file,
+}: {
+  metadata: Awaited<ReturnType<typeof middleware>>
+  file: {
+    key: string
+    name: string
+    url: string
+  }
+}) => {
+  const isFileExist = await db.file.findFirst({
+    where: {
+      key: file.key,
+    },
+  })
 
-  pdfUploader: f({ pdf: { maxFileSize: "8MB" } })
-    .middleware(middleware)
-    .onUploadComplete(async ({ metadata, file }) => {
-      const createdFile = await db.file.create({
-        data: {
-          key: file.key,
-          name: file.name,
-          userId: metadata.userId,
-          url: file.url,
-          uploadStatus: 'PROCESSING',
-        },
-      })
+  if (isFileExist) return
 
-      try {
-        const response = await fetch(file.url)
-        const blob = await response.blob()
+  const createdFile = await db.file.create({
+    data: {
+      key: file.key,
+      name: file.name,
+      userId: metadata.userId,
+      url: file.url,
+      uploadStatus: 'PROCESSING',
+    },
+  })
 
-        const loader = new PDFLoader(blob)
+  try {
+    const response = await fetch(file.url)
 
-        const pageLevelDocs = await loader.load()
+    const blob = await response.blob()
 
-        const pagesAmt = pageLevelDocs.length
+    const loader = new PDFLoader(blob)
 
-        const pinecone = await getPineconeClient()
-        const pineconeIndex = pinecone.Index('scribe')
+    const pageLevelDocs = await loader.load()
 
-        const embeddings = new OpenAIEmbeddings({
-          openAIApiKey: process.env.OPENAI_API_KEY,
-        })
+    const pagesAmt = pageLevelDocs.length
 
-        console.log(createdFile.id)
+    // await db.file.update({
+    //   data: {
+    //     uploadStatus: 'FAILED',
+    //   },
+    //   where: {
+    //     id: createdFile.id,
+    //   },
+    // })
 
-        await PineconeStore.fromDocuments(
-          pageLevelDocs,
-          embeddings,
-          {
-            pineconeIndex,
-            namespace: createdFile.id,
-          }
-        )
+    const embeddings = new OpenAIEmbeddings({
+      openAIApiKey: process.env.OPENAI_API_KEY,
+    })
 
-        await db.file.update({
-          data: {
-            uploadStatus: 'SUCCESS',
-          },
-          where: {
-            id: createdFile.id,
-          },
-        })
-
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      } catch(err) {
-        await db.file.update({
-          data: {
-            uploadStatus: 'FAILED',
-          },
-          where: {
-            id: createdFile.id,
-          },
-        })
+    await PineconeStore.fromDocuments(
+      pageLevelDocs,
+      embeddings,
+      {
+        pineconeIndex,
+        namespace: createdFile.id,
       }
-    }),
-} satisfies FileRouter;
+    )
+
+    await db.file.update({
+      data: {
+        uploadStatus: 'SUCCESS',
+      },
+      where: {
+        id: createdFile.id,
+      },
+    })
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  } catch (err) {
+    await db.file.update({
+      data: {
+        uploadStatus: 'FAILED',
+      },
+      where: {
+        id: createdFile.id,
+      },
+    })
+  }
+}
+
+export const        ourFileRouter = {
+  pdfUploader: f({ pdf: { maxFileSize: '4MB' } })
+    .middleware(middleware)
+    .onUploadComplete(onUploadComplete)
+  
+} satisfies FileRouter
 
 export type OurFileRouter = typeof ourFileRouter
